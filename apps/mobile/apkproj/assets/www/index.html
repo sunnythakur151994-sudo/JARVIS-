@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS — Music Shorts Factory</title>
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a33; --panel2:#182347; --line:#24315c;
+    --txt:#e8ecff; --dim:#94a0c8; --acc:#4f8cff; --acc2:#22d3ee;
+    --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --dead:#64748b;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{margin:0; font-family:"Segoe UI",Roboto,system-ui,sans-serif; background:var(--bg); color:var(--txt)}
+  header{padding:18px 20px 10px; display:flex; align-items:center; gap:12px; flex-wrap:wrap}
+  .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--acc),var(--acc2));display:flex;align-items:center;justify-content:center;font-size:20px}
+  h1{font-size:19px;margin:0;letter-spacing:.3px}
+  h1 small{display:block;font-size:11px;color:var(--dim);font-weight:400;letter-spacing:1.4px;text-transform:uppercase}
+  #status{margin-left:auto; display:flex; align-items:center; gap:8px; font-size:12px; color:var(--dim)}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--dead)}
+  .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.bad{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  .wrap{padding:0 16px 28px; max-width:1080px; margin:0 auto}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; margin-top:14px}
+  .card h2{margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim)}
+  .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+  input{flex:1; min-width:180px; background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14px; outline:none}
+  input:focus{border-color:var(--acc)}
+  button{background:var(--acc); border:0; color:#fff; font-size:14px; font-weight:600; padding:11px 18px; border-radius:10px; cursor:pointer}
+  button.ghost{background:var(--panel2); border:1px solid var(--line); color:var(--txt)}
+  button:active{transform:scale(.97)}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px}
+  .stat{background:var(--panel2); border:1px solid var(--line); border-radius:12px; padding:14px}
+  .stat b{font-size:26px; display:block; margin-top:4px}
+  .stat span{font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px}
+  table{width:100%; border-collapse:collapse; font-size:13px}
+  th{ text-align:left; color:var(--dim); font-weight:600; padding:8px 6px; border-bottom:1px solid var(--line); font-size:11px; text-transform:uppercase; letter-spacing:.8px}
+  td{padding:9px 6px; border-bottom:1px solid rgba(36,49,92,.5)}
+  .pill{display:inline-block; padding:3px 10px; border-radius:999px; font-size:11px; font-weight:600}
+  .pill.published{background:rgba(34,197,94,.15); color:var(--ok)}
+  .pill.ready,.pill.scheduled,.pill.queued,.pill.downloaded,.pill.transforming,.pill.downloading{background:rgba(79,140,255,.15); color:var(--acc)}
+  .pill.failed{background:rgba(239,68,68,.15); color:var(--bad)}
+  .pill.rejected,.pill.duplicate,.pill.skipped{background:rgba(100,116,139,.15); color:var(--dead)}
+  .muted{color:var(--dim); font-size:12px}
+  a{color:var(--acc2)}
+  .toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%) translateY(80px); background:var(--panel2); border:1px solid var(--line); padding:11px 18px; border-radius:12px; font-size:13px; opacity:0; transition:.3s; pointer-events:none; max-width:90vw}
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  footer{margin-top:18px; text-align:center; color:var(--dim); font-size:11px}
+  @media (max-width:600px){ h1{font-size:16px} .card{padding:13px} }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🎵</div>
+  <h1>JARVIS <small>Music Shorts Factory · Control Center</small></h1>
+  <div id="status"><div class="dot" id="dot"></div><span id="statusText">checking…</span></div>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <h2>⚙️ Connection</h2>
+    <div class="row">
+      <input id="apiBase" placeholder="Factory server URL — e.g. http://localhost:8000">
+      <button class="ghost" id="saveBtn">Save</button>
+      <button id="testBtn">Test &amp; Connect</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="channelId" placeholder="Channel ID (UUID) — from the factory database">
+      <input id="genreId" placeholder="Genre ID (optional) — for source scouting">
+    </div>
+    <div class="muted" style="margin-top:8px">The dashboard talks to the Shorts Factory API (music-shorts-factory engine, unmodified). Desktop app proxies through its built-in local server; the Android app connects to the URL above directly.</div>
+  </div>
+
+  <div class="card">
+    <h2>📊 Factory summary</h2>
+    <div class="grid">
+      <div class="stat"><span>Published</span><b id="sPublished">–</b></div>
+      <div class="stat"><span>Pending</span><b id="sPending">–</b></div>
+      <div class="stat"><span>Dead</span><b id="sDead">–</b></div>
+      <div class="stat"><span>Failed</span><b id="sFailed">–</b></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="fillBtn">🗓 Fill 30-day schedule</button>
+      <button class="ghost" id="refreshBtn">↻ Refresh</button>
+      <button class="ghost" id="ytBtn">🔗 Connect YouTube channel</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🎬 Media ledger</h2>
+    <table>
+      <thead><tr><th>Status</th><th>Genre</th><th>Source</th><th>Scheduled</th><th>YouTube</th><th></th></tr></thead>
+      <tbody id="ledger"><tr><td colspan="6" class="muted">No data yet — set the server URL and channel ID, then press Test &amp; Connect.</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>🔎 Source scouting <span class="muted">(needs a genre ID)</span></h2>
+    <div class="row">
+      <button class="ghost" id="candBtn">List candidates</button>
+    </div>
+    <table style="margin-top:10px">
+      <thead><tr><th>Handle</th><th>Platform</th><th>Followers</th><th>Avg views</th><th>Score</th><th></th></tr></thead>
+      <tbody id="candidates"><tr><td colspan="6" class="muted">Candidates appear here.</td></tr></tbody>
+    </table>
+  </div>
+
+  <footer>JARVIS Music Shorts Factory apps · engine: <b>music-shorts-factory</b> (code unmodified) · v1.0</footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const store = {
+    get api(){ return localStorage.getItem('jarvis.api') || 'http://localhost:8000'; },
+    set api(v){ localStorage.setItem('jarvis.api', v.replace(/\/+$/,'')); },
+    get ch(){ return localStorage.getItem('jarvis.channel') || ''; },
+    set ch(v){ localStorage.setItem('jarvis.channel', v.trim()); },
+    get g(){ return localStorage.getItem('jarvis.genre') || ''; },
+    set g(v){ localStorage.setItem('jarvis.genre', v.trim()); },
+  };
+  // Desktop build serves this UI through its local express proxy -> same origin.
+  // Android WebView loads from file:// -> use the configured absolute URL.
+  function base(){
+    if (location.protocol === 'http:' || location.protocol === 'https:') return '';
+    return store.api;
+  }
+  function toast(msg, bad){
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    t.style.borderColor = bad ? 'var(--bad)' : 'var(--line)';
+    setTimeout(()=>t.classList.remove('show'), 3200);
+  }
+  function setStatus(kind, text){
+    $('dot').className = 'dot ' + kind;
+    $('statusText').textContent = text;
+  }
+  async function api(path, opts){
+    const r = await fetch(base() + path, opts);
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    if (!r.ok) throw new Error((data && data.detail) ? data.detail : ('HTTP ' + r.status));
+    return data;
+  }
+  function pill(s){ return '<span class="pill ' + s + '">' + s + '</span>'; }
+
+  async function ping(){
+    try {
+      await api('/api/media/summary?channel_id=00000000-0000-0000-0000-000000000000');
+      setStatus('ok', 'connected');
+      return true;
+    } catch(e) {
+      // A reachable server answers (even with an error payload) — treat network fails as offline.
+      const offline = /Failed to fetch|NetworkError|load failed|ECONNREFUSED|unreachable/i.test(String(e));
+      setStatus(offline ? 'bad' : 'ok', offline ? 'server offline' : 'server reachable');
+      return !offline;
+    }
+  }
+
+  async function loadSummary(){
+    if (!store.ch) return;
+    try {
+      const d = await api('/api/media/summary?channel_id=' + encodeURIComponent(store.ch));
+      $('sPublished').textContent = d.published ?? 0;
+      $('sPending').textContent = d.pending ?? 0;
+      $('sDead').textContent = d.dead ?? 0;
+      $('sFailed').textContent = d.failed ?? 0;
+    } catch(e){ toast('Summary failed: ' + e.message, true); }
+  }
+  async function loadLedger(){
+    if (!store.ch) return;
+    try {
+      const rows = await api('/api/media/ledger?channel_id=' + encodeURIComponent(store.ch) + '&limit=25');
+      if (!rows.length) { $('ledger').innerHTML = '<tr><td colspan="6" class="muted">Ledger is empty.</td></tr>'; return; }
+      $('ledger').innerHTML = rows.map(r => {
+        const yt = r.yt_video_id ? '<a href="https://youtu.be/' + r.yt_video_id + '" target="_blank">watch</a>' : '<span class="muted">—</span>';
+        return '<tr><td>' + pill(r.status) + '</td><td>' + (r.genre||'') + '</td><td>' + (r.handle||'') +
+               '</td><td class="muted">' + (r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '—') +
+               '</td><td>' + yt + '</td><td><button class="ghost" data-skip="' + r.id + '" style="padding:5px 10px;font-size:12px">skip</button></td></tr>';
+      }).join('');
+      document.querySelectorAll('[data-skip]').forEach(b => b.onclick = async () => {
+        try { await api('/api/media/' + b.dataset.skip + '/skip', {method:'POST'}); toast('Skipped'); loadAll(); }
+        catch(e){ toast('Skip failed: ' + e.message, true); }
+      });
+    } catch(e){ toast('Ledger failed: ' + e.message, true); }
+  }
+  async function loadCandidates(){
+    if (!store.g) { toast('Set a Genre ID first', true); return; }
+    try {
+      const rows = await api('/api/sources/candidates?genre_id=' + encodeURIComponent(store.g));
+      if (!rows.length) { $('candidates').innerHTML = '<tr><td colspan="6" class="muted">No candidates found — run the discover worker.</td></tr>'; return; }
+      $('candidates').innerHTML = rows.map(r =>
+        '<tr><td><a href="' + (r.profile_url||'#') + '" target="_blank">@' + (r.handle||'') + '</a></td><td>' + (r.platform||'') +
+        '</td><td>' + (r.followers ?? '—') + '</td><td>' + (r.avg_views ?? '—') + '</td><td>' + (r.score ?? '—') +
+        '</td><td><button class="ghost" data-approve="' + r.id + '" style="padding:5px 10px;font-size:12px">approve</button></td></tr>').join('');
+      document.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => {
+        try { await api('/api/sources/' + b.dataset.approve + '/approve', {method:'POST'}); toast('Approved'); loadCandidates(); }
+        catch(e){ toast('Approve failed: ' + e.message, true); }
+      });
+    } catch(e){ toast('Candidates failed: ' + e.message, true); }
+  }
+  function loadAll(){ loadSummary(); loadLedger(); }
+
+  $('apiBase').value = store.api; $('channelId').value = store.ch; $('genreId').value = store.g;
+  $('saveBtn').onclick = () => {
+    store.api = $('apiBase').value.trim() || store.api;
+    store.ch = $('channelId').value; store.g = $('genreId').value;
+    toast('Saved'); ping();
+  };
+  $('testBtn').onclick = async () => {
+    store.api = $('apiBase').value.trim() || store.api;
+    store.ch = $('channelId').value; store.g = $('genreId').value;
+    if (await ping()) { toast('Connected to factory ✓'); loadAll(); }
+  };
+  $('refreshBtn').onclick = loadAll;
+  $('fillBtn').onclick = async () => {
+    if (!store.ch) { toast('Channel ID required', true); return; }
+    try {
+      const d = await api('/api/schedule/fill?channel_id=' + encodeURIComponent(store.ch) + '&days=30', {method:'POST'});
+      toast('Scheduled ' + (d.placed ?? 0) + ' media items'); loadAll();
+    } catch(e){ toast('Fill failed: ' + e.message, true); }
+  };
+  $('ytBtn').onclick = () => {
+    window.open(base() + '/api/channels/connect', '_blank');
+  };
+  $('candBtn').onclick = loadCandidates;
+
+  // Live status via socket.io when running under the desktop server.
+  if (typeof io !== 'undefined') {
+    const s = io();
+    s.on('status', st => setStatus(st.online ? 'ok' : 'bad', st.online ? 'connected · live' : 'server offline'));
+  } else {
+    ping(); setInterval(ping, 30000);
+  }
+  loadAll(); setInterval(loadAll, 60000);
+})();
+</script>
+</body>
+</html>

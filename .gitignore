@@ -1,0 +1,6 @@
+dist/
+tools/
+google_drive/
+node_modules/
+apps/mobile/apkproj/build/
+*.log

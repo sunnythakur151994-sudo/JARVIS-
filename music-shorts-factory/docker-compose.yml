@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: factory
+    volumes:
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01.sql
+      - pgdata:/var/lib/postgresql/data
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    ports: ["8000:8000"]
+    volumes: ["./storage:/storage", "./cookies:/cookies"]
+  worker:
+    build: .
+    command: python -m app.workers.loop
+    env_file: .env
+    volumes: ["./storage:/storage", "./cookies:/cookies"]
+volumes:
+  pgdata:
