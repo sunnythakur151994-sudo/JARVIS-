@@ -3,25 +3,23 @@ JARVIS - MUSIC SHORTS FACTORY  (desktop app v1.0)
 
 WHAT THIS IS
   The control-center app for the Music Shorts Factory engine
-  (music-shorts-factory, used unmodified). It shows the factory
-  summary, media ledger, schedule and source scouting, and proxies
-  all /api calls to your factory server.
+  (music-shorts-factory, used unmodified). One single executable
+  contains everything: the dashboard UI, the local server and the
+  whole runtime. Nothing to install.
 
 HOW TO RUN
-  Windows : double-click  JARVIS-ShortsFactory.bat
-  Linux   : run           ./JARVIS-ShortsFactory.sh
-  macOS   : double-click  JARVIS-ShortsFactory.command
+  Windows : double-click  JARVIS-ShortsFactory.exe
+  Linux   : run           ./JARVIS-ShortsFactory
+  macOS   : double-click  JARVIS-ShortsFactory  (or run it from Terminal)
 
   The app window opens automatically in your default browser
   (Edge app mode on Windows). If it does not, open:
       http://localhost:8787/
 
-CONFIG (.env)
+CONFIG (optional .env next to the executable)
   FACTORY_URL  where the Shorts Factory engine runs
                (default http://localhost:8000)
   PORT         dashboard port (default 8787)
-
-  On first run a .env file is created from .env.example.
 
 THE ENGINE
   The factory engine is the Python project in music-shorts-factory/.

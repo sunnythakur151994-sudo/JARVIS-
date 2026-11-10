@@ -2,7 +2,12 @@
  * JARVIS — Music Shorts Factory · Desktop app server
  * Serves the control-center UI and proxies /api to the Shorts Factory engine.
  * Runs on the exact dependency set declared in package.json (express, socket.io,
- * node-fetch, dotenv). The engine code (music-shorts-factory) is used unmodified.
+ * dotenv). The engine code (music-shorts-factory) is used unmodified.
+ *
+ * This file is also the entry point embedded into the single-file
+ * JARVIS-ShortsFactory executable (Node SEA): UI and socket.io client are
+ * embedded as strings at build time (gen/embedded.js), with on-disk fallback
+ * for development runs.
  */
 'use strict';
 
@@ -10,6 +15,7 @@ require('dotenv').config();
 
 const path = require('path');
 const http = require('http');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -18,19 +24,33 @@ const PORT = parseInt(process.env.PORT || '8787', 10);
 const FACTORY_URL = (process.env.FACTORY_URL || 'http://localhost:8000').replace(/\/+$/, '');
 const OPEN_BROWSER = process.env.NO_BROWSER !== '1';
 
+/* ---- embedded assets (build-time), with dev fallbacks ---- */
+let UI_FILES = null;          // { 'index.html': '<!DOCTYPE ...', ... }
+let SOCKET_IO_CLIENT = null;  // socket.io client bundle source
+try { ({ UI_FILES, SOCKET_IO_CLIENT } = require('./gen/embedded.js')); } catch (e) { /* dev mode */ }
+
+function uiFile(name) {
+  if (UI_FILES && UI_FILES[name] != null) return UI_FILES[name];
+  try { return fs.readFileSync(path.join(__dirname, 'ui', name), 'utf8'); } catch (e) { return null; }
+}
+function socketIoClientSource() {
+  if (SOCKET_IO_CLIENT) return SOCKET_IO_CLIENT;
+  try { return fs.readFileSync(require.resolve('socket.io/client-dist/socket.io.js'), 'utf8'); }
+  catch (e) { return null; }
+}
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, { serveClient: false });
 
 let lastStatus = { online: false, factory: FACTORY_URL, at: null };
 
 /* ---------------------------------------------------------------- *
- * Proxy /api -> FACTORY_URL/api  (node-fetch keeps streaming simple)
+ * Proxy /api -> FACTORY_URL/api  (global fetch — Node 18+)
  * ---------------------------------------------------------------- */
 app.use('/api', async (req, res) => {
   const target = FACTORY_URL + req.originalUrl;
   try {
-    const fetch = (await import('node-fetch')).default;
     const chunks = [];
     for await (const c of req) chunks.push(c);
     const body = Buffer.concat(chunks);
@@ -61,16 +81,37 @@ app.use('/api', async (req, res) => {
 });
 
 /* ---------------------------------------------------------------- *
- * Static UI + live status channel
+ * socket.io client + UI (embedded first, disk fallback)
  * ---------------------------------------------------------------- */
-app.use(express.static(path.join(__dirname, 'ui')));
+app.get('/jarvis-socketio.js', (req, res) => {
+  const src = socketIoClientSource();
+  if (!src) return res.status(404).end();
+  res.set('content-type', 'application/javascript; charset=utf-8').send(src);
+});
+app.get('/', (req, res) => {
+  const html = uiFile('index.html');
+  if (!html) return res.status(404).send('UI not found');
+  res.set('content-type', 'text/html; charset=utf-8').send(html);
+});
+app.get('/app.js', (req, res) => {
+  const src = uiFile('app.js');
+  if (!src) return res.status(404).end();
+  res.set('content-type', 'application/javascript; charset=utf-8').send(src);
+});
+app.get('/style.css', (req, res) => {
+  const src = uiFile('style.css');
+  if (!src) return res.status(404).end();
+  res.set('content-type', 'text/css; charset=utf-8').send(src);
+});
 
+/* ---------------------------------------------------------------- *
+ * Live status channel
+ * ---------------------------------------------------------------- */
 async function pingFactory() {
   try {
-    const fetch = (await import('node-fetch')).default;
-    const r = await fetch(FACTORY_URL + '/api/media/summary?channel_id=00000000-0000-0000-0000-000000000000', {
+    await fetch(FACTORY_URL + '/api/media/summary?channel_id=00000000-0000-0000-0000-000000000000', {
       method: 'GET',
-      signal: AbortSignal.timeout ? AbortSignal.timeout(6000) : undefined,
+      signal: AbortSignal.timeout(6000),
     });
     lastStatus = { online: true, factory: FACTORY_URL, at: Date.now() };
   } catch (e) {

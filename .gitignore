@@ -3,4 +3,6 @@ tools/
 google_drive/
 node_modules/
 apps/mobile/apkproj/build/
+apps/desktop/build/
+apps/desktop/gen/
 *.log
