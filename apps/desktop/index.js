@@ -1,13 +1,10 @@
 /**
  * JARVIS — Music Shorts Factory · Desktop app server
- * Serves the control-center UI and proxies /api to the Shorts Factory engine.
- * Runs on the exact dependency set declared in package.json (express, socket.io,
- * dotenv). The engine code (music-shorts-factory) is used unmodified.
- *
- * This file is also the entry point embedded into the single-file
- * JARVIS-ShortsFactory executable (Node SEA): UI and socket.io client are
- * embedded as strings at build time (gen/embedded.js), with on-disk fallback
- * for development runs.
+ * - Serves the control-center UI (embedded into the executable)
+ * - Proxies /api to the Shorts Factory engine
+ * - AUTO-STARTS the bundled engine (boot.py: embedded Postgres + FastAPI)
+ * - YouTube OAuth helper: saves client credentials, captures the callback,
+ *   auto-fills the Channel ID.
  */
 'use strict';
 
@@ -25,8 +22,8 @@ const FACTORY_URL = (process.env.FACTORY_URL || 'http://localhost:8000').replace
 const OPEN_BROWSER = process.env.NO_BROWSER !== '1';
 
 /* ---- embedded assets (build-time), with dev fallbacks ---- */
-let UI_FILES = null;          // { 'index.html': '<!DOCTYPE ...', ... }
-let SOCKET_IO_CLIENT = null;  // socket.io client bundle source
+let UI_FILES = null;
+let SOCKET_IO_CLIENT = null;
 try { ({ UI_FILES, SOCKET_IO_CLIENT } = require('./gen/embedded.js')); } catch (e) { /* dev mode */ }
 
 function uiFile(name) {
@@ -39,14 +36,76 @@ function socketIoClientSource() {
   catch (e) { return null; }
 }
 
+/* ---- engine location + process management ---- */
+function findEngineDir() {
+  const candidates = [
+    process.env.ENGINE_DIR,
+    path.join(path.dirname(process.execPath), 'engine'),
+    path.join(__dirname, 'engine'),
+    path.join(process.cwd(), 'engine'),
+    path.join(__dirname, '..', '..', 'engine'),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, 'boot.py'))) return c;
+  }
+  return null;
+}
+const ENGINE_DIR = findEngineDir();
+const engineIsLocal = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(FACTORY_URL);
+let engineProc = null;
+let engineState = ENGINE_DIR ? 'stopped' : 'not-bundled';
+
+function enginePython() {
+  if (ENGINE_DIR) {
+    const win = path.join(ENGINE_DIR, 'python', 'python.exe');
+    if (process.platform === 'win32' && fs.existsSync(win)) return win;
+    const posix = path.join(ENGINE_DIR, 'python', 'bin', 'python3');
+    if (fs.existsSync(posix)) return posix;
+  }
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+function startEngine() {
+  if (!ENGINE_DIR || !engineIsLocal || process.env.NO_ENGINE === '1') return;
+  if (engineProc) { try { engineProc.kill(); } catch (e) {} }
+  const env = { ...process.env };
+  const sp = path.join(ENGINE_DIR, 'site-packages');
+  if (fs.existsSync(sp)) env.PYTHONPATH = sp + (env.PYTHONPATH ? path.delimiter + env.PYTHONPATH : '');
+  console.log('  starting engine: ' + ENGINE_DIR);
+  engineState = 'starting';
+  let cmd, args;
+  if (process.platform === 'win32') {
+    cmd = enginePython();
+    args = [path.join(ENGINE_DIR, 'boot.py')];
+  } else {
+    cmd = 'sh';
+    args = [path.join(ENGINE_DIR, 'run.sh')];
+  }
+  engineProc = spawn(cmd, args, {
+    cwd: ENGINE_DIR, env, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const thisProc = engineProc;
+  const tag = (d) => String(d).trim().split('\n').forEach(l => l && console.log('  [engine] ' + l));
+  engineProc.stdout.on('data', tag);
+  engineProc.stderr.on('data', tag);
+  engineProc.on('exit', (code) => {
+    if (engineProc !== thisProc) return; // a newer engine instance took over
+    engineState = 'stopped';
+    engineProc = null;
+    console.log('  [engine] exited with code ' + code);
+  });
+  setTimeout(() => { if (engineProc) engineState = 'running'; }, 2500);
+}
+
 const app = express();
+app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, { serveClient: false });
 
-let lastStatus = { online: false, factory: FACTORY_URL, at: null };
+let lastStatus = { online: false, factory: FACTORY_URL, at: null, engine: engineState };
 
 /* ---------------------------------------------------------------- *
- * Proxy /api -> FACTORY_URL/api  (global fetch — Node 18+)
+ * Proxy /api -> FACTORY_URL/api  (follows nothing; forwards redirects)
  * ---------------------------------------------------------------- */
 app.use('/api', async (req, res) => {
   const target = FACTORY_URL + req.originalUrl;
@@ -65,6 +124,9 @@ app.use('/api', async (req, res) => {
       redirect: 'manual',
     });
     res.status(r.status);
+    // forward redirect targets (OAuth!) and content headers
+    const loc = r.headers.get('location');
+    if (loc) res.set('location', loc);
     const ct = r.headers.get('content-type');
     if (ct) res.set('content-type', ct);
     const buf = Buffer.from(await r.arrayBuffer());
@@ -81,6 +143,101 @@ app.use('/api', async (req, res) => {
 });
 
 /* ---------------------------------------------------------------- *
+ * YouTube setup + OAuth callback capture
+ * ---------------------------------------------------------------- */
+function envFile() {
+  return ENGINE_DIR ? path.join(ENGINE_DIR, '.env') : null;
+}
+function readEnvFile() {
+  const p = envFile();
+  if (!p || !fs.existsSync(p)) return {};
+  const out = {};
+  for (const line of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (m) out[m[1]] = m[2];
+  }
+  return out;
+}
+function writeEnvFile(updates) {
+  const p = envFile();
+  if (!p) throw new Error('bundled engine folder not found');
+  const cur = readEnvFile();
+  const merged = { ...cur, ...updates };
+  const txt = Object.entries(merged).map(([k, v]) => k + '=' + v).join('\n') + '\n';
+  fs.writeFileSync(p, txt);
+  return merged;
+}
+function youtubeConfigured() {
+  const e = readEnvFile();
+  return !!(e.YT_CLIENT_ID && e.YT_CLIENT_ID.trim() && e.YT_CLIENT_ID.trim() !== '""');
+}
+
+app.post('/jarvis/setup/youtube', (req, res) => {
+  try {
+    const { client_id, client_secret } = req.body || {};
+    if (!client_id || !client_secret) return res.status(400).json({ error: 'client_id and client_secret required' });
+    writeEnvFile({
+      YT_CLIENT_ID: client_id.trim(),
+      YT_CLIENT_SECRET: client_secret.trim(),
+      YT_REDIRECT_URI: 'http://localhost:' + PORT + '/jarvis/callback',
+    });
+    startEngine(); // restart so the engine picks up the credentials
+    res.json({ ok: true, redirect_uri: 'http://localhost:' + PORT + '/jarvis/callback' });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/jarvis/status', (req, res) => {
+  res.json({
+    engine_dir: ENGINE_DIR,
+    engine: engineState,
+    factory_online: lastStatus.online,
+    youtube_configured: youtubeConfigured(),
+    redirect_uri: 'http://localhost:' + PORT + '/jarvis/callback',
+  });
+});
+
+app.get('/jarvis/genres', (req, res) => {
+  try {
+    const p = ENGINE_DIR ? path.join(ENGINE_DIR, 'genres.json') : null;
+    if (!p || !fs.existsSync(p)) return res.json([]);
+    res.json(JSON.parse(fs.readFileSync(p, 'utf8')));
+  } catch (e) {
+    res.json([]);
+  }
+});
+
+app.get('/jarvis/callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.status(400).send('Missing ?code= from Google');
+  try {
+    const r = await fetch(FACTORY_URL + '/api/channels/callback?code=' + encodeURIComponent(code));
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch { data = { detail: text.slice(0, 500) }; }
+    if (!r.ok) return res.status(502).send('Engine error: ' + JSON.stringify(data));
+    const channelId = data.channel_id;
+    res.set('content-type', 'text/html; charset=utf-8').send(`<!DOCTYPE html><html><head>
+<meta charset="utf-8"><title>YouTube connected</title>
+<style>body{font-family:system-ui,sans-serif;background:#0b1020;color:#e8ecff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{background:#121a33;border:1px solid #24315c;border-radius:16px;padding:36px;text-align:center;max-width:520px}
+h1{color:#22c55e;font-size:22px} code{display:block;background:#182347;border-radius:10px;padding:12px;margin:16px 0;font-size:13px;word-break:break-all}</style>
+</head><body><div class="box">
+<h1>✅ YouTube channel connected!</h1>
+<p>Channel ID (saved automatically in the dashboard):</p>
+<code>${channelId}</code>
+<p style="color:#94a0c8;font-size:13px">You can close this window.</p>
+</div>
+<script>
+try{ if(window.opener){ window.opener.postMessage({jarvisChannelId:${JSON.stringify(channelId)}}, '*'); } }catch(e){}
+setTimeout(function(){ window.close(); }, 2500);
+</script></body></html>`);
+  } catch (e) {
+    res.status(502).send('Could not reach engine: ' + String(e));
+  }
+});
+
+/* ---------------------------------------------------------------- *
  * socket.io client + UI (embedded first, disk fallback)
  * ---------------------------------------------------------------- */
 app.get('/jarvis-socketio.js', (req, res) => {
@@ -93,16 +250,6 @@ app.get('/', (req, res) => {
   if (!html) return res.status(404).send('UI not found');
   res.set('content-type', 'text/html; charset=utf-8').send(html);
 });
-app.get('/app.js', (req, res) => {
-  const src = uiFile('app.js');
-  if (!src) return res.status(404).end();
-  res.set('content-type', 'application/javascript; charset=utf-8').send(src);
-});
-app.get('/style.css', (req, res) => {
-  const src = uiFile('style.css');
-  if (!src) return res.status(404).end();
-  res.set('content-type', 'text/css; charset=utf-8').send(src);
-});
 
 /* ---------------------------------------------------------------- *
  * Live status channel
@@ -113,9 +260,9 @@ async function pingFactory() {
       method: 'GET',
       signal: AbortSignal.timeout(6000),
     });
-    lastStatus = { online: true, factory: FACTORY_URL, at: Date.now() };
+    lastStatus = { online: true, factory: FACTORY_URL, at: Date.now(), engine: engineState };
   } catch (e) {
-    lastStatus = { online: false, factory: FACTORY_URL, at: Date.now() };
+    lastStatus = { online: false, factory: FACTORY_URL, at: Date.now(), engine: engineState };
   }
   return lastStatus;
 }
@@ -123,7 +270,7 @@ async function pingFactory() {
 io.on('connection', (socket) => {
   socket.emit('status', lastStatus);
 });
-setInterval(async () => { io.emit('status', await pingFactory()); }, 15000);
+setInterval(async () => { io.emit('status', await pingFactory()); }, 10000);
 
 /* ---------------------------------------------------------------- *
  * Start
@@ -153,10 +300,11 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log('  JARVIS - Music Shorts Factory (desktop)');
   console.log('  UI      : http://localhost:' + PORT + '/');
   console.log('  Engine  : ' + FACTORY_URL);
-  console.log('  Config  : .env  (PORT, FACTORY_URL, NO_BROWSER)');
+  console.log('  Engine folder : ' + (ENGINE_DIR || '(not bundled - set FACTORY_URL to a running engine)'));
   console.log('==========================================================');
+  startEngine();
   await pingFactory();
   io.emit('status', lastStatus);
-  console.log(lastStatus.online ? '  engine reachable' : '  engine NOT reachable (start music-shorts-factory / docker compose)');
+  console.log(lastStatus.online ? '  engine reachable' : '  engine not reachable yet (it may still be starting up)');
   openBrowser();
 });

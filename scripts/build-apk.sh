@@ -15,6 +15,9 @@ PROJ="$ROOT/apps/mobile/apkproj"
 DIST="$ROOT/dist"
 KS="$TOOLS/debug.keystore"
 
+# keep the app UI in sync with the shared dashboard
+cp "$ROOT/apps/ui/index.html" "$PROJ/assets/www/index.html"
+
 # wheel extraction strips exec bits; the JVM needs jspawnhelper executable to run aapt2
 chmod +x "$TOOLS/ext/jdk4py/jdk4py/java-runtime/lib/jspawnhelper" 2>/dev/null || true
 chmod -R +x "$TOOLS/ext/jdk4py/jdk4py/java-runtime/bin" 2>/dev/null || true

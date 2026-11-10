@@ -34,3 +34,12 @@ THE ENGINE
 PHONE / TABLET
   The Android app (JARVIS-MusicShortsFactory.apk) can point at this
   desktop app (http://<your-ip>:8787) or directly at the engine URL.
+
+SEEDED SOURCE PROFILES
+  The engine starts with 11 genres (gossip, hiphop, kpop, bollywood,
+  edm, latin, indie, country, charts, memes, popculture) and 53
+  Instagram/TikTok source profiles (full profile URLs, status
+  "candidate"). Open "Source scouting", pick a genre and press
+  "List candidates" -> approve the ones you want.
+  @popehiveupdates is marked "unverified" - if the Viewer errors on
+  it, just skip it (leave it unapproved).

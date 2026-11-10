@@ -87,6 +87,9 @@ chmod +x "$DIST/JARVIS-MusicShortsFactory-linux64/JARVIS-ShortsFactory" \
 # bare exe at dist root for direct download
 cp "$BUILD/JARVIS-ShortsFactory.exe" "$DIST/JARVIS-ShortsFactory-win64.exe"
 
+echo "== 7/7 bundle the factory engine =="
+"$ROOT/scripts/build-engine.sh"
+
 cd "$DIST"
 for d in JARVIS-MusicShortsFactory-win64 JARVIS-MusicShortsFactory-linux64 JARVIS-MusicShortsFactory-mac-x64; do
   rm -f "$d.zip"

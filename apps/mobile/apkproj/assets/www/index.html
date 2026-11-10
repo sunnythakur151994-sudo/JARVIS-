@@ -26,6 +26,7 @@
   .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
   input{flex:1; min-width:180px; background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14px; outline:none}
   input:focus{border-color:var(--acc)}
+  select{flex:1; min-width:180px; background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:10px; padding:11px 13px; font-size:14px; outline:none}
   button{background:var(--acc); border:0; color:#fff; font-size:14px; font-weight:600; padding:11px 18px; border-radius:10px; cursor:pointer}
   button.ghost{background:var(--panel2); border:1px solid var(--line); color:var(--txt)}
   button:active{transform:scale(.97)}
@@ -66,10 +67,35 @@
       <button id="testBtn">Test &amp; Connect</button>
     </div>
     <div class="row" style="margin-top:10px">
-      <input id="channelId" placeholder="Channel ID (UUID) — from the factory database">
+      <input id="channelId" placeholder="Channel ID — auto-filled after YouTube connect">
       <input id="genreId" placeholder="Genre ID (optional) — for source scouting">
     </div>
     <div class="muted" style="margin-top:8px">The dashboard talks to the Shorts Factory API (music-shorts-factory engine, unmodified). Desktop app proxies through its built-in local server; the Android app connects to the URL above directly.</div>
+  </div>
+
+  <div class="card" id="youtubeCard">
+    <h2>🎬 YouTube channel connect</h2>
+    <div class="muted" style="margin-bottom:10px">
+      <b>One-time setup</b> — create free OAuth credentials in Google Cloud Console:<br>
+      1. Go to <a href="https://console.cloud.google.com" target="_blank">console.cloud.google.com</a> → create a project<br>
+      2. APIs &amp; Services → Enable <b>YouTube Data API v3</b><br>
+      3. APIs &amp; Services → Credentials → <b>Create OAuth client ID</b> → Application type: <b>Web application</b><br>
+      4. In that client, add Authorized redirect URI:<br>
+      <code id="redirectUri" style="display:inline-block;background:var(--panel2);padding:6px 10px;border-radius:8px;margin:6px 0;font-size:12px">http://localhost:8787/jarvis/callback</code>
+      <button class="ghost" id="copyUriBtn" style="padding:5px 10px;font-size:12px;margin-left:6px">copy</button><br>
+      5. Copy the <b>Client ID</b> and <b>Client Secret</b> into the boxes below → Save.<br>
+      6. Press <b>Connect YouTube account</b> and sign in with your channel's Google account.
+    </div>
+    <div class="row">
+      <input id="ytClientId" placeholder="Google OAuth Client ID (....apps.googleusercontent.com)">
+      <input id="ytClientSecret" placeholder="Google OAuth Client Secret (GOCSPX-...)">
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="ytSaveBtn">💾 Save credentials</button>
+      <button id="ytConnectBtn">▶ Connect YouTube account</button>
+      <span class="muted" id="ytState"></span>
+    </div>
+    <div class="muted" style="margin-top:8px">After Google approves, the Channel ID is captured automatically and filled into the field above.</div>
   </div>
 
   <div class="card">
@@ -96,8 +122,9 @@
   </div>
 
   <div class="card">
-    <h2>🔎 Source scouting <span class="muted">(needs a genre ID)</span></h2>
+    <h2>🔎 Source scouting <span class="muted">(pick a genre)</span></h2>
     <div class="row">
+      <select id="genreSelect"><option value="">— pick genre (auto-filled from engine) —</option></select>
       <button class="ghost" id="candBtn">List candidates</button>
     </div>
     <table style="margin-top:10px">
@@ -193,7 +220,9 @@
       const rows = await api('/api/sources/candidates?genre_id=' + encodeURIComponent(store.g));
       if (!rows.length) { $('candidates').innerHTML = '<tr><td colspan="6" class="muted">No candidates found — run the discover worker.</td></tr>'; return; }
       $('candidates').innerHTML = rows.map(r =>
-        '<tr><td><a href="' + (r.profile_url||'#') + '" target="_blank">@' + (r.handle||'') + '</a></td><td>' + (r.platform||'') +
+        '<tr><td><a href="' + (r.profile_url||'#') + '" target="_blank">@' + (r.handle||'') + '</a>' +
+        (['popehiveupdates'].includes(r.handle) ? ' <span class="pill rejected" title="spelling not confirmed - skip if Viewer errors">unverified</span>' : '') +
+        '</td><td>' + (r.platform||'') +
         '</td><td>' + (r.followers ?? '—') + '</td><td>' + (r.avg_views ?? '—') + '</td><td>' + (r.score ?? '—') +
         '</td><td><button class="ghost" data-approve="' + r.id + '" style="padding:5px 10px;font-size:12px">approve</button></td></tr>').join('');
       document.querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => {
@@ -224,14 +253,79 @@
     } catch(e){ toast('Fill failed: ' + e.message, true); }
   };
   $('ytBtn').onclick = () => {
-    window.open(base() + '/api/channels/connect', '_blank');
+    document.getElementById('youtubeCard').scrollIntoView({behavior:'smooth'});
   };
+
+  /* ---- YouTube setup + auto channel-id capture ---- */
+  function isDesktopApp(){ return location.protocol === 'http:' || location.protocol === 'https:'; }
+  $('copyUriBtn').onclick = () => {
+    const t = $('redirectUri').textContent;
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(()=>toast('Redirect URI copied'));
+  };
+  $('ytSaveBtn').onclick = async () => {
+    const client_id = $('ytClientId').value.trim(), client_secret = $('ytClientSecret').value.trim();
+    if (!client_id || !client_secret) { toast('Enter Client ID and Client Secret', true); return; }
+    try {
+      const r = await fetch('/jarvis/setup/youtube', {method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({client_id, client_secret})});
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      toast('Credentials saved ✓ engine restarting...');
+      $('ytState').textContent = 'credentials saved';
+      setTimeout(refreshYtState, 3000);
+    } catch(e) { toast('Save failed: ' + e.message + ' (do this from the desktop app)', true); }
+  };
+  $('ytConnectBtn').onclick = async () => {
+    try {
+      const s = await (await fetch('/jarvis/status')).json();
+      if (!s.youtube_configured) { toast('Save your Google credentials first (steps above)', true); return; }
+      window.open('/api/channels/connect', '_blank');
+    } catch(e) { toast('Use the desktop app to connect YouTube', true); }
+  };
+  async function refreshYtState(){
+    if (!isDesktopApp()) { $('ytState').textContent = 'setup happens in the desktop app'; return; }
+    try {
+      const s = await (await fetch('/jarvis/status')).json();
+      $('ytState').textContent = s.youtube_configured ? '✓ credentials configured' : 'credentials not saved yet';
+      $('redirectUri').textContent = s.redirect_uri;
+    } catch(e) {}
+  }
+  window.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.jarvisChannelId) {
+      $('channelId').value = ev.data.jarvisChannelId;
+      store.ch = ev.data.jarvisChannelId;
+      toast('YouTube channel connected ✓ Channel ID saved');
+      loadAll();
+    }
+  });
+  refreshYtState();
+
+  /* ---- genre picker (auto-filled from the engine's seeded genres) ---- */
+  async function loadGenres(){
+    if (!isDesktopApp()) return;
+    try {
+      const rows = await (await fetch('/jarvis/genres')).json();
+      const sel = $('genreSelect');
+      sel.innerHTML = '<option value="">— pick genre (auto-filled from engine) —</option>' +
+        rows.map(g => '<option value="' + g.id + '">' + g.label + ' · @' + (g.display_name || 'channel') + '</option>').join('');
+      if (store.g) sel.value = store.g;
+    } catch(e) {}
+  }
+  $('genreSelect').onchange = () => {
+    $('genreId').value = $('genreSelect').value;
+    store.g = $('genreSelect').value;
+    if (store.g) loadCandidates();
+  };
+  loadGenres(); setInterval(loadGenres, 60000);
   $('candBtn').onclick = loadCandidates;
 
   // Live status via socket.io when running under the desktop server.
   if (typeof io !== 'undefined') {
     const s = io();
-    s.on('status', st => setStatus(st.online ? 'ok' : 'bad', st.online ? 'connected · live' : 'server offline'));
+    s.on('status', st => {
+      const eng = st.engine && st.engine !== 'not-bundled' ? ' · engine ' + st.engine : '';
+      setStatus(st.online ? 'ok' : 'bad', (st.online ? 'connected · live' : 'starting engine…') + eng);
+    });
   } else {
     ping(); setInterval(ping, 30000);
   }

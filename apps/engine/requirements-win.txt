@@ -1,0 +1,9 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+psycopg[binary]==3.2.3
+pydantic-settings==2.5.2
+google-api-python-client==2.149.0
+google-auth-oauthlib==1.2.1
+cryptography==43.0.1
+yt-dlp>=2026.10.26
+pgserver==0.1.4
